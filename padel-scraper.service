@@ -1,0 +1,13 @@
+[Unit]
+Description=Padel Scraper Service
+After=network.target
+
+[Service]
+Type=oneshot
+User=scraper
+WorkingDirectory=/home/scraper/app
+Environment=PATH=/home/scraper/app/venv/bin:/home/scraper/app/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/bin/bash /home/scraper/app/run_scraper.sh
+
+[Install]
+WantedBy=multi-user.target
