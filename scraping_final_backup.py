@@ -102,12 +102,12 @@ def get_page_with_proxy(url, timeout=30):
             except UnicodeDecodeError:
                 fallback_encoding = response.apparent_encoding or "latin-1"
                 print(
-                    f"âš ï¸ No se pudo decodificar como UTF-8 {url}, usando {fallback_encoding}."
+                    f"⚠️ No se pudo decodificar como UTF-8 {url}, usando {fallback_encoding}."
                 )
                 return content.decode(fallback_encoding, errors="replace")
-        print(f"âŒ Error {response.status_code} al acceder a {url}")
+        print(f"❌ Error {response.status_code} al acceder a {url}")
     except Exception as exc:
-        print(f"âŒ ExcepciÃ³n al acceder a {url}: {exc}")
+        print(f"❌ Excepción al acceder a {url}: {exc}")
     return None
 
 
@@ -122,7 +122,7 @@ def normalize_url(url, *, keep_query: bool = False) -> str:
 
 def collect_category_product_links(category_url, category_name):
     """Collect all product URLs for a category, following pagination."""
-    print(f"ðŸ“ Scrapeando categorÃ­a: {category_name}")
+    print(f"🏓 Scrapeando categoría: {category_name}")
     base_url = normalize_url(category_url)
     next_page_url = base_url
     visited_pages = set()
@@ -139,12 +139,12 @@ def collect_category_product_links(category_url, category_name):
     ]
 
     while next_page_url and next_page_url not in visited_pages:
-        print(f"  ðŸ“„ PÃ¡gina {page_number}: {next_page_url}")
+        print(f"  📄 Página {page_number}: {next_page_url}")
         visited_pages.add(next_page_url)
 
         html = get_page_with_proxy(next_page_url)
         if not html:
-            print("  âš ï¸ No se pudo obtener la pÃ¡gina, se detiene la categorÃ­a.")
+            print("  ⚠️ No se pudo obtener la página, se detiene la categoría.")
             break
 
         soup = BeautifulSoup(html, "html.parser")
@@ -176,9 +176,9 @@ def collect_category_product_links(category_url, category_name):
                         product_urls.append(candidate_url)
                         menu_products += 1
             if menu_products:
-                print(f"  ðŸ”— Productos desde mega menÃº: {menu_products}")
+                print(f"  🔗 Productos desde mega menú: {menu_products}")
 
-        # Intentar encontrar enlaces mediante selectores especÃ­ficos
+        # Intentar encontrar enlaces mediante selectores específicos
         candidates = []
         for selector in candidate_selectors:
             candidates.extend(soup.select(selector))
@@ -217,7 +217,7 @@ def collect_category_product_links(category_url, category_name):
             product_urls.append(full_url)
             page_products += 1
 
-        print(f"  ðŸ”— Productos nuevos en la pÃ¡gina: {page_products}")
+        print(f"  🔗 Productos nuevos en la página: {page_products}")
 
         next_page_candidate = None
         link_rel_next = soup.find("link", rel="next")
@@ -239,7 +239,7 @@ def collect_category_product_links(category_url, category_name):
         else:
             next_page_url = None
 
-    print(f"ðŸ“¦ Total productos encontrados en {category_name}: {len(product_urls)}")
+    print(f"📦 Total productos encontrados en {category_name}: {len(product_urls)}")
     return product_urls
 
 
@@ -251,7 +251,7 @@ def map_stock_quantity(label):
     text = label.strip().upper() if label else ""
     if "EN STOCK" in text:
         return "10"
-    if "ÃšLTIMAS UNIDADES" in text or "ULTIMAS UNIDADES" in text:
+    if "ÚLTIMAS UNIDADES" in text or "ULTIMAS UNIDADES" in text:
         return "5"
     if text:
         return "0"
@@ -335,11 +335,11 @@ def build_shopify_row(
 def scrape_product_details(product_url, category_name):
     """Scrape a product page and return Shopify-ready rows."""
     normalized_url = normalize_url(product_url)
-    print(f"    ðŸ” Producto: {normalized_url}")
+    print(f"    🔍 Producto: {normalized_url}")
 
     html = get_page_with_proxy(normalized_url)
     if not html:
-        print("    âš ï¸ No se pudo obtener la pÃ¡gina del producto.")
+        print("    ⚠️ No se pudo obtener la página del producto.")
         return []
 
     soup = BeautifulSoup(html, "html.parser")
@@ -385,7 +385,7 @@ def scrape_product_details(product_url, category_name):
     handle = normalized_url.split("/")[-1]
 
     if stock_quantity == "0":
-        print("    âš ï¸ Producto sin stock, se omite.")
+        print("    ⚠️ Producto sin stock, se omite.")
         return []
 
     variants = []
@@ -422,7 +422,7 @@ def scrape_product_details(product_url, category_name):
         if variants:
             return variants
 
-    # Sin variantes o categorÃ­a especial
+    # Sin variantes o categoría especial
     row = build_shopify_row(
         cont=1,
         name=name,
@@ -447,15 +447,15 @@ def scrape_product_details(product_url, category_name):
 
 def save_csv(products, category_name):
     if not products:
-        print(f"âš ï¸ No hay productos para {category_name}")
+        print(f"⚠️ No hay productos para {category_name}")
         return
 
     fecha_hoy = datetime.now().date()
-    output_dir = f"ExtracciÃ³n_{fecha_hoy}"
+    output_dir = f"Extracción_{fecha_hoy}"
     os.makedirs(output_dir, exist_ok=True)
 
     filepath = os.path.join(output_dir, f"{category_name}.csv")
-    print(f"ðŸ’¾ Guardando {len(products)} filas en {filepath}")
+    print(f"💾 Guardando {len(products)} filas en {filepath}")
 
     with open(filepath, mode="w", newline="", encoding="utf-8-sig") as file:
         writer = csv.DictWriter(file, fieldnames=SHOPIFY_HEADERS)
@@ -465,7 +465,7 @@ def save_csv(products, category_name):
 
 
 def main():
-    print("ðŸš€ Scraping final de tiendapadelpoint.com (modo Shopify)...")
+    print("🚀 Scraping final de tiendapadelpoint.com (modo Shopify)...")
 
     summary = {}
     for entry in CATEGORY_LIST:
@@ -476,12 +476,12 @@ def main():
         product_urls = collect_category_product_links(category_url, category_name)
 
         if not product_urls:
-            print("âš ï¸ No se encontraron productos en la categorÃ­a.")
+            print("⚠️ No se encontraron productos en la categoría.")
             continue
 
         category_rows = []
         for idx, product_url in enumerate(product_urls, start=1):
-            print(f"  ðŸ‘‰ Producto {idx}/{len(product_urls)}")
+            print(f"  👉 Producto {idx}/{len(product_urls)}")
             product_rows = scrape_product_details(product_url, category_name)
             if product_rows:
                 category_rows.extend(product_rows)
@@ -490,13 +490,13 @@ def main():
         save_csv(category_rows, category_name)
         summary[category_name] = len(category_rows)
 
-        print(f"  âœ… Filas Shopify generadas: {len(category_rows)}")
+        print(f"  ✅ Filas Shopify generadas: {len(category_rows)}")
         time.sleep(random.uniform(4, 6))
 
-    print("\nðŸŽ‰ Â¡Scraping completado!")
-    print(f"ðŸ“Š Total categorÃ­as procesadas: {len(summary)}")
+    print("\n🎉 ¡Scraping completado!")
+    print(f"📊 Total categorías procesadas: {len(summary)}")
     for category, count in summary.items():
-        print(f"  ðŸ“¦ {category}: {count} filas Shopify")
+        print(f"  📦 {category}: {count} filas Shopify")
 
 
 if __name__ == "__main__":

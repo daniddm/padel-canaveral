@@ -54,15 +54,15 @@ def slugify(s: str) -> str:
 def canonical_handle(product_title: str, product_url_or_slug: str, max_dup_num: int = 9) -> str:
     """
     Normaliza el handle:
-    - Si el slug termina en -A-B y el tÃ­tulo termina en -A y B es pequeÃ±o (<=max_dup_num), deja -A.
-    - Si el slug termina en -A-B y el tÃ­tulo NO contiene -A-B y ambos son pequeÃ±os: corta el sufijo (-A-B).
-    - Si el slug termina en -B y el tÃ­tulo NO termina en -B y B es pequeÃ±o: corta el -B.
+    - Si el slug termina en -A-B y el título termina en -A y B es pequeño (<=max_dup_num), deja -A.
+    - Si el slug termina en -A-B y el título NO contiene -A-B y ambos son pequeños: corta el sufijo (-A-B).
+    - Si el slug termina en -B y el título NO termina en -B y B es pequeño: corta el -B.
     - En caso contrario, conserva el slug.
     """
     title_slug = slugify(product_title or "")
     raw_slug = slugify((product_url_or_slug or "").rstrip("/").split("/")[-1])
 
-    # PatrÃ³n -A-B (mÃ¡s especÃ­fico)
+    # Patrón -A-B (más específico)
     m2 = DUP_TWO_NUMS_TAIL.search(raw_slug)
     if m2:
         A, B = m2.groups()
@@ -81,7 +81,7 @@ def canonical_handle(product_title: str, product_url_or_slug: str, max_dup_num: 
             pass
         return raw_slug
 
-    # PatrÃ³n -B (una sola cifra al final)
+    # Patrón -B (una sola cifra al final)
     m1 = SINGLE_NUM_TAIL.search(raw_slug)
     if m1:
         B = m1.group(1)
@@ -98,7 +98,7 @@ def canonical_handle(product_title: str, product_url_or_slug: str, max_dup_num: 
 
 def build_handle(name: str, brand: str, ean: str, ref: str, fallback_slug: str) -> str:
     """
-    Prioriza EAN o REF para hacer handles Ãºnicos cuando no hay EAN vÃ¡lido.
+    Prioriza EAN o REF para hacer handles únicos cuando no hay EAN válido.
     """
     if ean and re.fullmatch(r"\d{8,14}", ean.strip()):
         return slugify(f"{name}-{ean}")
@@ -110,7 +110,7 @@ def build_handle(name: str, brand: str, ean: str, ref: str, fallback_slug: str) 
 
 
 def get_page(url, timeout=30, max_retries=3):
-    """Obtiene una pÃ¡gina usando el proxy service con reintentos."""
+    """Obtiene una página usando el proxy service con reintentos."""
     for attempt in range(max_retries):
         try:
             proxy_url = PROXY_SERVICE + url
@@ -118,22 +118,22 @@ def get_page(url, timeout=30, max_retries=3):
             if response.status_code == 200:
                 response.encoding = response.apparent_encoding or 'utf-8'
                 return response.text
-            print(f"âš ï¸ Intento {attempt + 1}: Error {response.status_code} en {url}")
+            print(f"⚠️ Intento {attempt + 1}: Error {response.status_code} en {url}")
             if response.status_code == 429:
                 wait_time = 2 ** attempt * 5
-                print(f"â³ Rate limit detectado. Esperando {wait_time}s...")
+                print(f"⏳ Rate limit detectado. Esperando {wait_time}s...")
                 time.sleep(wait_time)
         except Exception as exc:
-            print(f"âš ï¸ Intento {attempt + 1}: Error al acceder a {url}: {exc}")
+            print(f"⚠️ Intento {attempt + 1}: Error al acceder a {url}: {exc}")
         if attempt < max_retries - 1:
             time.sleep(2 ** attempt)
-    print(f"âŒ No se pudo acceder a {url} despuÃ©s de {max_retries} intentos")
+    print(f"❌ No se pudo acceder a {url} después de {max_retries} intentos")
     return None
 
 
 def collect_category_product_links(category_url, category_name):
-    """Recolecta todas las URLs de productos de una categorÃ­a con paginaciÃ³n."""
-    print(f"ðŸ“ Scrapeando categorÃ­a: {category_name}")
+    """Recolecta todas las URLs de productos de una categoría con paginación."""
+    print(f"🏓 Scrapeando categoría: {category_name}")
     base_url = urljoin(SHOP_BASE_URL, category_url)
     product_urls = []
     seen = set()  # FIX: prevenir duplicados
@@ -144,7 +144,7 @@ def collect_category_product_links(category_url, category_name):
 
     soup = BeautifulSoup(response, "html.parser")
 
-    # Detectar paginaciÃ³n - FIX: mÃ¡s robusto
+    # Detectar paginación - FIX: más robusto
     paginator = soup.find("div", class_="pagination")
     total_pages = 1
     if paginator:
@@ -155,12 +155,12 @@ def collect_category_product_links(category_url, category_name):
                 nums.append(int(m.group(1)))
         total_pages = max(nums) if nums else 1
     
-    print(f" ðŸ“„ Total pÃ¡ginas: {total_pages}")
+    print(f" 📄 Total páginas: {total_pages}")
 
-    # Recorrer todas las pÃ¡ginas
+    # Recorrer todas las páginas
     for page in range(1, total_pages + 1):
         page_url = f"{base_url}?page={page}"
-        print(f" ðŸ“„ PÃ¡gina {page}/{total_pages}")
+        print(f" 📄 Página {page}/{total_pages}")
         html = get_page(page_url)
         if not html:
             continue
@@ -169,7 +169,7 @@ def collect_category_product_links(category_url, category_name):
         main_products_div = soup.select_one("div.main-products")
         if main_products_div:
             products_div_image = main_products_div.select("div.image")
-            print(f" ðŸ”— Productos en pÃ¡gina: {len(products_div_image)}")
+            print(f" 🔗 Productos en página: {len(products_div_image)}")
             for image in products_div_image:
                 link = image.find("a")
                 if link and link.get("href"):
@@ -180,7 +180,7 @@ def collect_category_product_links(category_url, category_name):
                         product_urls.append(full_url)
         time.sleep(random.uniform(1, 2))
 
-    print(f"ðŸ“¦ Total productos Ãºnicos: {len(product_urls)}")
+    print(f"📦 Total productos únicos: {len(product_urls)}")
     return product_urls
 
 
@@ -190,16 +190,16 @@ def extract_text(element):
 
 def map_stock_quantity(label):
     text = label.strip().upper() if label else ""
-    if "DISPONIBLE" in text or "EN STOCK" in text:  # FIX: aÃ±adido DISPONIBLE
+    if "DISPONIBLE" in text or "EN STOCK" in text:  # FIX: añadido DISPONIBLE
         return "10"
-    if "ÃšLTIMAS UNIDADES" in text or "ULTIMAS UNIDADES" in text:
+    if "ÚLTIMAS UNIDADES" in text or "ULTIMAS UNIDADES" in text:
         return "5"
     return "0"
 
 
 def scrape_product_details(product_url, category_name):
     """Scrapea los detalles de un producto."""
-    print(f" ðŸ” {product_url.split('/')[-1]}")
+    print(f" 🔍 {product_url.split('/')[-1]}")
     html = get_page(product_url)
     if not html:
         return []
@@ -219,7 +219,7 @@ def scrape_product_details(product_url, category_name):
         if manufacturer:
             brand = extract_text(manufacturer)
 
-    # CÃ³digos
+    # Códigos
     model_spans = soup.select("span.p-model")
     codigo_producto = extract_text(model_spans[-1]) if model_spans else ""
     ean = extract_text(soup.find("span", class_="journal-ean"))
@@ -263,7 +263,7 @@ def scrape_product_details(product_url, category_name):
     price_value = precio_nuevo if precio_nuevo else precio
     compare_price = precio_anterior
 
-    # DescripciÃ³n
+    # Descripción
     descripcion_div = soup.find("div", {"id": "tab-description"})
     descripcion = extract_text(descripcion_div).replace("\n", " ").replace("\r", " ").strip()
 
@@ -287,7 +287,7 @@ def scrape_product_details(product_url, category_name):
             if not option_text:
                 continue
             
-            # FIX: quita sÃ­mbolos iniciales sin comer letras
+            # FIX: quita símbolos iniciales sin comer letras
             option_value = re.sub(r"^[^A-Za-z0-9]+", "", option_text)
 
             variant_key = re.sub(r'[^a-z0-9]', '', option_value.lower())[:8] or "default"
@@ -408,21 +408,21 @@ def scrape_product_details(product_url, category_name):
             }
             variants.append(row)
 
-    print(f" âœ… Marca: {brand} | Variantes: {len(variants)} | Stock: {stock_quantity}")
+    print(f" ✅ Marca: {brand} | Variantes: {len(variants)} | Stock: {stock_quantity}")
     return variants
 
 
 def save_csv(products, category_name):
     if not products:
-        print(f"âš ï¸ No hay productos para {category_name}")
+        print(f"⚠️ No hay productos para {category_name}")
         return
 
     fecha_hoy = datetime.now().date()
-    output_dir = f"ExtracciÃ³n_{fecha_hoy}"
+    output_dir = f"Extracción_{fecha_hoy}"
     os.makedirs(output_dir, exist_ok=True)
 
     filepath = os.path.join(output_dir, f"{category_name}.csv")
-    print(f"ðŸ’¾ Guardando {len(products)} filas en {filepath}")
+    print(f"💾 Guardando {len(products)} filas en {filepath}")
 
     with open(filepath, mode="w", newline="", encoding="utf-8-sig") as file:
         writer = csv.DictWriter(file, fieldnames=SHOPIFY_HEADERS)
@@ -432,9 +432,9 @@ def save_csv(products, category_name):
 
 
 def main():
-    print("ðŸš€ Iniciando scraping de tiendapadelpoint.com")
-    print(f"ðŸ“… Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"ðŸ“Š CategorÃ­as a procesar: {len(CATEGORY_LIST)}\n")
+    print("🚀 Iniciando scraping de tiendapadelpoint.com")
+    print(f"📅 Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"📊 Categorías a procesar: {len(CATEGORY_LIST)}\n")
 
     summary = {}
     for idx, entry in enumerate(CATEGORY_LIST, 1):
@@ -447,7 +447,7 @@ def main():
 
         product_urls = collect_category_product_links(category_url, category_name)
         if not product_urls:
-            print(f"âš ï¸ No se encontraron productos en {category_name}")
+            print(f"⚠️ No se encontraron productos en {category_name}")
             summary[category_name] = 0
             continue
 
@@ -461,16 +461,16 @@ def main():
 
         save_csv(category_rows, category_name)
         summary[category_name] = len(category_rows)
-        print(f"\nâœ… {category_name}: {len(category_rows)} filas generadas")
+        print(f"\n✅ {category_name}: {len(category_rows)} filas generadas")
 
         time.sleep(random.uniform(3, 5))
 
     print("\n" + "=" * 70)
-    print("ðŸŽ‰ Â¡Scraping completado!")
+    print("🎉 ¡Scraping completado!")
     print("=" * 70)
-    print(f"ðŸ“Š Total categorÃ­as procesadas: {len(summary)}")
+    print(f"📊 Total categorías procesadas: {len(summary)}")
     for category, count in summary.items():
-        print(f" ðŸ“¦ {category}: {count} filas")
+        print(f" 📦 {category}: {count} filas")
     print("=" * 70)
 
 
