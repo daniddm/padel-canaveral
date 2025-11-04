@@ -351,7 +351,6 @@ def scrape_product_details(product_url, category_name):
             cont += 1
     else:
         # Producto simple - solo si tiene stock
-        if stock_quantity != "0":
             row = {
                 "Title": name,
                 "URL handle": handle,

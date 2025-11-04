@@ -210,15 +210,42 @@ def shopify_request(method: str, endpoint: str, *, params=None, json=None) -> re
 
 def shopify_graphql(query: str, variables: dict = None) -> dict:
     """Ejecuta una query GraphQL contra Shopify."""
+    payload = {"query": query, "variables": variables or {}}
     resp = requests.post(
         GRAPHQL_URL,
         headers=HEADERS,
-        json={"query": query, "variables": variables or {}},
+        json=payload,
         timeout=REQUEST_TIMEOUT,
     )
-    data = resp.json()
-    if resp.status_code >= 400 or "errors" in data:
+
+    if resp.status_code >= 400:
+        preview = resp.text.strip()
+        preview = preview[:400] + ("…" if len(preview) > 400 else "")
+        raise ShopifyUploaderError(
+            f"GraphQL error HTTP {resp.status_code}: {preview or '<cuerpo vacío>'}"
+        )
+
+    if not resp.text.strip():
+        raise ShopifyUploaderError(
+            f"GraphQL respuesta vacía (status {resp.status_code})"
+        )
+
+    try:
+        data = resp.json()
+    except requests.exceptions.JSONDecodeError as exc:
+        preview = resp.text.strip()
+        preview = preview[:400] + ("…" if len(preview) > 400 else "")
+        raise ShopifyUploaderError(
+            f"GraphQL respuesta no JSON (status {resp.status_code}): {preview or '<cuerpo vacío>'}"
+        ) from exc
+
+    if "errors" in data:
         raise ShopifyUploaderError(f"GraphQL error: {resp.status_code} {data}")
+
+    if "data" not in data or data["data"] is None:
+        raise ShopifyUploaderError(
+            f"GraphQL respuesta sin campo 'data' (status {resp.status_code}): {data}"
+        )
     time.sleep(RATE_LIMIT_DELAY)
     return data["data"]
 
@@ -373,10 +400,16 @@ def process_csv(
         key_sku = (base.get("SKU") or "").strip()
 
         found = None
-        try:
-            found = find_product_by_barcode_or_sku(key_barcode, key_sku)
-        except ShopifyUploaderError as exc:
-            log(f"⚠️ Lookup por EAN/SKU falló: {exc}")
+        for attempt in range(3):
+            try:
+                found = find_product_by_barcode_or_sku(key_barcode, key_sku)
+                break
+            except ShopifyUploaderError as exc:
+                if attempt < 2:
+                    log(f"⚠️ Lookup falló (intento {attempt + 1}/3): {exc}")
+                    time.sleep(2)
+                else:
+                    log(f"⚠️ Lookup por EAN/SKU falló después de 3 intentos: {exc}")
 
         existing_id = None
         old_handle = None

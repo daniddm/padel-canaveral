@@ -11,7 +11,7 @@ mkdir -p "$LOG_DIR"
 
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-echo "ðŸ“ Inicio del scraping (`date +"%Y-%m-%d %H:%M:%S"`)"
+echo "🏓 Inicio del scraping (`date +"%Y-%m-%d %H:%M:%S"`)"
 
 cd "$PROJECT_DIR"
 
@@ -32,25 +32,25 @@ if [ -z "$VENV_DIR" ]; then
 fi
 
 if [ -z "$VENV_DIR" ]; then
-    echo "âš ï¸ Entorno virtual no encontrado en $PROJECT_DIR/{venv,.venv}" >&2
+    echo "⚠️ Entorno virtual no encontrado en $PROJECT_DIR/{venv,.venv}" >&2
     exit 1
 fi
 
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 
-echo "ðŸ“Š Ejecutando scraping_final.py..."
+echo "📊 Ejecutando scraping_final.py..."
 python scraping_final.py
 
 if [ -n "${SHOPIFY_ADMIN_TOKEN:-}" ] && [ -n "${SHOPIFY_DOMAIN:-}" ]; then
-    echo "ðŸš€ Subiendo CSVs a Shopify..."
-    if python upload_shopify.py; then
-        echo "ðŸ›’ Subida a Shopify completada."
+    echo "🚀 Subiendo CSVs a Shopify..."
+    if python upload_shopify.py --source-dir "Extracción_$(date +"%Y-%m-%d")"; then
+        echo "🛒 Subida a Shopify completada."
     else
-        echo "âš ï¸ FallÃ³ la subida a Shopify (ver log)." >&2
+        echo "⚠️ Falló la subida a Shopify (ver log)." >&2
     fi
 else
-    echo "âš ï¸ Variables SHOPIFY_ADMIN_TOKEN o SHOPIFY_DOMAIN no definidas. Se omite subida a Shopify." >&2
+    echo "⚠️ Variables SHOPIFY_ADMIN_TOKEN o SHOPIFY_DOMAIN no definidas. Se omite subida a Shopify." >&2
 fi
 
-echo "âœ… Scraping completado (`date +"%Y-%m-%d %H:%M:%S"`)"
+echo "✅ Scraping completado (`date +"%Y-%m-%d %H:%M:%S"`)"
