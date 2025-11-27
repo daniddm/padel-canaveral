@@ -1,11 +1,11 @@
 """
-upload_shopify.py - Versión con reintentos y manejo robusto de errores
+upload_shopify.py - Versión mínima con protección de borrador e ignore
 
-Mejoras implementadas:
-1. Reintentos automáticos con backoff exponencial
-2. Manejo de rate limits (429)
-3. Recuperación de errores de conexión
-4. Mejor logging de errores
+Cambios aplicados:
+1. Respeta productos en borrador (status=draft)
+2. Respeta tag scraper:keep-draft
+3. NUEVO: Respeta tags de ignore (scraper:ignore, no tocar)
+4. NUEVO: Prune respeta productos ignorados
 """
 import argparse
 import csv
@@ -14,28 +14,22 @@ import re
 import sys
 import time
 from datetime import datetime
-from http.client import RemoteDisconnected
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Any, Type
+from typing import Dict, List, Optional, Set, Tuple, Any
 
 import requests
-from requests.exceptions import ConnectionError, Timeout, RequestException
-
-try:
-    from urllib3.exceptions import ProtocolError
-except Exception:  # pragma: no cover - urllib3 siempre está con requests pero mejor ser cautos
-    ProtocolError = None  # type: ignore[assignment]
 
 SHOP_DOMAIN = os.getenv("SHOPIFY_DOMAIN", "").strip()
 ACCESS_TOKEN = os.getenv("SHOPIFY_ADMIN_TOKEN", "").strip()
 API_VERSION = os.getenv("SHOPIFY_API_VERSION", "2024-07").strip()
 REQUEST_TIMEOUT = float(os.getenv("SHOPIFY_TIMEOUT", "30"))
-RATE_LIMIT_DELAY = float(os.getenv("SHOPIFY_RATE_DELAY", "1.0"))  # Aumentado a 1 segundo
+RATE_LIMIT_DELAY = float(os.getenv("SHOPIFY_RATE_DELAY", "0.6"))
 SCRAPER_TAG = os.getenv("SHOPIFY_SCRAPER_TAG", "padel-scraper-1").strip() or "padel-scraper-1"
-MAX_RETRIES = int(os.getenv("SHOPIFY_MAX_RETRIES", "3"))
 
-# Tags de control
+# >>> Tags de control <<<
 KEEP_DRAFT_TAG = os.getenv("SHOPIFY_KEEP_DRAFT_TAG", "scraper:keep-draft").strip()
+
+# NUEVO: Acepta varios alias de ignore (incluye "no tocar")
 IGNORE_TAGS = {
     t.strip().lower()
     for t in os.getenv("SHOPIFY_IGNORE_TAGS", "scraper:ignore,no tocar").split(",")
@@ -50,20 +44,6 @@ HEADERS = {
 GRAPHQL_URL = f"https://{SHOP_DOMAIN}/admin/api/{API_VERSION}/graphql.json"
 
 _existing_products_cache: Optional[Dict[str, int]] = None
-_failed_images_report: List[Dict[str, str]] = []
-
-
-_NETWORK_ERRORS: Tuple[Type[BaseException], ...]
-_base_errors: Tuple[Type[BaseException], ...] = (
-    ConnectionError,
-    Timeout,
-    RequestException,
-    RemoteDisconnected,
-)
-if ProtocolError is not None:
-    _NETWORK_ERRORS = _base_errors + (ProtocolError,)
-else:
-    _NETWORK_ERRORS = _base_errors
 
 
 class ShopifyUploaderError(Exception):
@@ -73,10 +53,9 @@ class ShopifyUploaderError(Exception):
 def log(message: str) -> None:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now}] {message}")
-    sys.stdout.flush()  # Asegurar que se escribe inmediatamente
 
 
-# Helpers para tags
+# >>> NUEVO: helpers para tags <<<
 def _split_tags(tags_raw: str) -> Set[str]:
     """Convierte string de tags CSV a set."""
     return {t.strip() for t in (tags_raw or "").split(",") if t and t.strip()}
@@ -212,133 +191,63 @@ def build_product_payload(rows: List[Dict[str, str]]) -> Dict:
 
 
 def shopify_request(method: str, endpoint: str, *, params=None, json=None) -> requests.Response:
-    """Realiza peticiones a Shopify con reintentos automáticos."""
     url = f"https://{SHOP_DOMAIN}/admin/api/{API_VERSION}/{endpoint}"
-    
-    for attempt in range(MAX_RETRIES):
-        try:
-            response = requests.request(
-                method=method,
-                url=url,
-                headers=HEADERS,
-                params=params,
-                json=json,
-                timeout=REQUEST_TIMEOUT,
-            )
-            
-            # Manejo de rate limit
-            if response.status_code == 429:
-                retry_after = float(response.headers.get('Retry-After', '5'))
-                log(f"⏳ Rate limit alcanzado, esperando {retry_after}s...")
-                time.sleep(retry_after)
-                continue
-            
-            # Si hay error pero no es rate limit, lanzar excepción
-            if response.status_code >= 500:
-                # Errores del servidor, reintentar
-                if attempt < MAX_RETRIES - 1:
-                    wait_time = (2 ** attempt) * 2
-                    log(f"⚠️ Error {response.status_code} del servidor, reintentando en {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
-                    
-            if response.status_code >= 400:
-                raise ShopifyUploaderError(
-                    f"Error {response.status_code} en {method} {endpoint}: {response.text[:500]}"
-                )
-            
-            time.sleep(RATE_LIMIT_DELAY)
-            return response
-            
-        except _NETWORK_ERRORS as e:
-            if attempt < MAX_RETRIES - 1:
-                wait_time = (2 ** attempt) * 2  # 2, 4, 8 segundos
-                log(f"⚠️ Error de conexión en {endpoint} (intento {attempt + 1}/{MAX_RETRIES})")
-                log(f"   Tipo de error: {type(e).__name__}: {str(e)[:100]}")
-                log(f"   Reintentando en {wait_time}s...")
-                time.sleep(wait_time)
-            else:
-                raise ShopifyUploaderError(
-                    f"Conexión perdida con {endpoint} después de {MAX_RETRIES} intentos: {e}"
-                )
-    
-    # Si llegamos aquí, agotamos los reintentos sin éxito
-    raise ShopifyUploaderError(f"No se pudo completar {method} {endpoint} después de {MAX_RETRIES} intentos")
+    response = requests.request(
+        method=method,
+        url=url,
+        headers=HEADERS,
+        params=params,
+        json=json,
+        timeout=REQUEST_TIMEOUT,
+    )
+    if response.status_code >= 400:
+        raise ShopifyUploaderError(
+            f"Error {response.status_code} en {method} {endpoint}: {response.text}"
+        )
+    time.sleep(RATE_LIMIT_DELAY)
+    return response
 
 
 def shopify_graphql(query: str, variables: dict = None) -> dict:
-    """Ejecuta una query GraphQL contra Shopify con reintentos."""
+    """Ejecuta una query GraphQL contra Shopify."""
     payload = {"query": query, "variables": variables or {}}
-    
-    for attempt in range(MAX_RETRIES):
-        try:
-            resp = requests.post(
-                GRAPHQL_URL,
-                headers=HEADERS,
-                json=payload,
-                timeout=REQUEST_TIMEOUT,
-            )
-            
-            # Manejo de rate limit
-            if resp.status_code == 429:
-                retry_after = float(resp.headers.get('Retry-After', '5'))
-                log(f"⏳ Rate limit GraphQL, esperando {retry_after}s...")
-                time.sleep(retry_after)
-                continue
+    resp = requests.post(
+        GRAPHQL_URL,
+        headers=HEADERS,
+        json=payload,
+        timeout=REQUEST_TIMEOUT,
+    )
 
-            # Errores del servidor
-            if resp.status_code >= 500:
-                if attempt < MAX_RETRIES - 1:
-                    wait_time = (2 ** attempt) * 2
-                    log(f"⚠️ Error GraphQL {resp.status_code}, reintentando en {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
+    if resp.status_code >= 400:
+        preview = resp.text.strip()
+        preview = preview[:400] + ("…" if len(preview) > 400 else "")
+        raise ShopifyUploaderError(
+            f"GraphQL error HTTP {resp.status_code}: {preview or '<cuerpo vacío>'}"
+        )
 
-            if resp.status_code >= 400:
-                preview = resp.text.strip()
-                preview = preview[:400] + ("…" if len(preview) > 400 else "")
-                raise ShopifyUploaderError(
-                    f"GraphQL error HTTP {resp.status_code}: {preview or '<cuerpo vacío>'}"
-                )
+    if not resp.text.strip():
+        raise ShopifyUploaderError(
+            f"GraphQL respuesta vacía (status {resp.status_code})"
+        )
 
-            if not resp.text.strip():
-                raise ShopifyUploaderError(
-                    f"GraphQL respuesta vacía (status {resp.status_code})"
-                )
+    try:
+        data = resp.json()
+    except requests.exceptions.JSONDecodeError as exc:
+        preview = resp.text.strip()
+        preview = preview[:400] + ("…" if len(preview) > 400 else "")
+        raise ShopifyUploaderError(
+            f"GraphQL respuesta no JSON (status {resp.status_code}): {preview or '<cuerpo vacío>'}"
+        ) from exc
 
-            try:
-                data = resp.json()
-            except requests.exceptions.JSONDecodeError as exc:
-                preview = resp.text.strip()
-                preview = preview[:400] + ("…" if len(preview) > 400 else "")
-                raise ShopifyUploaderError(
-                    f"GraphQL respuesta no JSON (status {resp.status_code}): {preview or '<cuerpo vacío>'}"
-                ) from exc
+    if "errors" in data:
+        raise ShopifyUploaderError(f"GraphQL error: {resp.status_code} {data}")
 
-            if "errors" in data:
-                raise ShopifyUploaderError(f"GraphQL error: {resp.status_code} {data}")
-
-            if "data" not in data or data["data"] is None:
-                raise ShopifyUploaderError(
-                    f"GraphQL respuesta sin campo 'data' (status {resp.status_code}): {data}"
-                )
-            
-            time.sleep(RATE_LIMIT_DELAY)
-            return data["data"]
-            
-        except _NETWORK_ERRORS as e:
-            if attempt < MAX_RETRIES - 1:
-                wait_time = (2 ** attempt) * 2
-                log(f"⚠️ Error GraphQL de conexión (intento {attempt + 1}/{MAX_RETRIES})")
-                log(f"   Tipo: {type(e).__name__}: {str(e)[:100]}")
-                log(f"   Reintentando en {wait_time}s...")
-                time.sleep(wait_time)
-            else:
-                raise ShopifyUploaderError(
-                    f"GraphQL falló después de {MAX_RETRIES} intentos: {e}"
-                )
-    
-    raise ShopifyUploaderError(f"GraphQL agotó {MAX_RETRIES} reintentos sin éxito")
+    if "data" not in data or data["data"] is None:
+        raise ShopifyUploaderError(
+            f"GraphQL respuesta sin campo 'data' (status {resp.status_code}): {data}"
+        )
+    time.sleep(RATE_LIMIT_DELAY)
+    return data["data"]
 
 
 def find_product_by_barcode_or_sku(barcode: str, sku: str):
@@ -448,15 +357,13 @@ def delete_product(product_id: int) -> None:
     log(f"🧹 Producto existente {product_id} eliminado para rehacerlo.")
 
 
-def add_image_to_product(product_id: int, image_url: str, alt_text: str = "", *, handle: str = "", max_retries: int = 5) -> bool:
+def add_image_to_product(product_id: int, image_url: str, alt_text: str = "", *, max_retries: int = 3) -> bool:
     """
-    Sube una imagen a un producto con delays y reintentos mejorados.
+    Sube una imagen a un producto existente usando la API REST de imágenes.
+    Hace reintentos básicos para mitigar errores intermitentes de Shopify.
     """
     if not product_id or not image_url:
         return False
-
-    # Dar tiempo a Shopify para que procese el producto recién creado
-    time.sleep(2)
 
     payload = {
         "image": {
@@ -470,37 +377,18 @@ def add_image_to_product(product_id: int, image_url: str, alt_text: str = "", *,
     endpoint = f"products/{product_id}/images.json"
     for attempt in range(1, max_retries + 1):
         try:
-            if attempt > 1:
-                wait_time = attempt * 3  # 3, 6, 9, 12… segundos
-                log(f"⏳ Esperando {wait_time}s antes de reintentar imagen...")
-                time.sleep(wait_time)
-
             shopify_request("POST", endpoint, json=payload)
             log(f"✅ Imagen añadida al producto {product_id}")
-            time.sleep(RATE_LIMIT_DELAY)
             return True
-
         except ShopifyUploaderError as exc:
-            error_msg = str(exc)
-            if "422" in error_msg or "Invalid image" in error_msg:
-                log(f"❌ Imagen inválida o no accesible: {image_url}")
-                _failed_images_report.append({
-                    "handle": handle,
-                    "image_url": image_url,
-                    "reason": f"Invalid/422: {error_msg}"
-                })
-                return False
             log(f"⚠️ Error al añadir imagen (intento {attempt}/{max_retries}): {exc}")
+        except Exception as exc:  # pragma: no cover - defensivo
+            log(f"❌ Excepción al subir imagen (intento {attempt}/{max_retries}): {exc}")
 
-        except Exception as exc:
-            log(f"❌ Excepción inesperada (intento {attempt}/{max_retries}): {exc}")
+        if attempt < max_retries:
+            time.sleep(2)
 
     log(f"❌ No se pudo subir la imagen del producto {product_id} tras {max_retries} intentos.")
-    _failed_images_report.append({
-        "handle": handle,
-        "image_url": image_url,
-        "reason": f"Max retries ({max_retries}) exceeded"
-    })
     return False
 
 
@@ -521,7 +409,7 @@ def create_product(payload: Dict) -> Dict:
     product = response.json().get("product", {}) or {}
 
     if image_url and product.get("id"):
-        added = add_image_to_product(product["id"], image_url, alt_text, handle=product.get("handle", ""))
+        added = add_image_to_product(product["id"], image_url, alt_text)
         if not added:
             log(f"⚠️ El producto {product.get('handle') or product['id']} quedó sin imagen.")
 
@@ -566,10 +454,16 @@ def process_csv(
         key_sku = (base.get("SKU") or "").strip()
 
         found = None
-        try:
-            found = find_product_by_barcode_or_sku(key_barcode, key_sku)
-        except ShopifyUploaderError as exc:
-            log(f"⚠️ Lookup por EAN/SKU falló: {exc}")
+        for attempt in range(3):
+            try:
+                found = find_product_by_barcode_or_sku(key_barcode, key_sku)
+                break
+            except ShopifyUploaderError as exc:
+                if attempt < 2:
+                    log(f"⚠️ Lookup falló (intento {attempt + 1}/3): {exc}")
+                    time.sleep(2)
+                else:
+                    log(f"⚠️ Lookup por EAN/SKU falló después de 3 intentos: {exc}")
 
         existing_id = None
         old_handle = None
@@ -581,7 +475,7 @@ def process_csv(
         if not existing_id:
             existing_id = find_existing_product_id(handle)
 
-        # Leer status y tags del producto existente
+        # >>> Leer status y tags del producto existente <<<
         existing_status = None
         existing_tags: Set[str] = set()
         if existing_id:
@@ -592,21 +486,22 @@ def process_csv(
             except ShopifyUploaderError as exc:
                 log(f"⚠️ No se pudo leer el producto {existing_id}: {exc}")
 
-        # A) IGNORE: no tocar
+        # >>> A) IGNORE: no tocar <<<
         if _has_ignore_tag(existing_tags):
             log(f"🚫 '{handle}' tiene tag de ignore (no tocar), omitido")
             summary["skipped"] += 1
             continue
 
-        # B) LOCK DE DRAFT: si el merchant lo tiene en borrador, se queda en borrador
+        # >>> B) LOCK DE DRAFT: si el merchant lo tiene en borrador, se queda en borrador <<<
         if existing_status == "draft" or KEEP_DRAFT_TAG in existing_tags:
             payload["product"]["status"] = "draft"
+            # Preservar el tag keep-draft para que se vea claro en el Admin
             new_tags = _split_tags(payload["product"].get("tags") or "")
             new_tags.add(KEEP_DRAFT_TAG)
             payload["product"]["tags"] = ", ".join(sorted(new_tags))
             log(f"📝 '{handle}' mantenido en borrador (status=draft o tag={KEEP_DRAFT_TAG})")
 
-        # Procesar producto
+        # >>> Procesar producto <<<
         try:
             if existing_id and delete_existing:
                 delete_product(existing_id)
@@ -644,6 +539,7 @@ def process_csv(
 def list_scraper_products() -> Dict[str, Dict[str, Any]]:
     """
     Return mapping handle -> {id, tags} for products tagged by the scraper.
+    NUEVO: Devuelve también los tags para respetar ignore en prune.
     """
     products: Dict[str, Dict[str, Any]] = {}
     params_base = {"limit": 250, "fields": "id,handle,tags"}
@@ -683,7 +579,7 @@ def prune_missing_scraper_products(
 ) -> int:
     """
     Delete scraper-managed products that are not present in current handles.
-    Respeta productos con tags de ignore.
+    NUEVO: Respeta productos con tags de ignore (scraper:ignore, no tocar).
     """
     if dry_run:
         log("🔎 Dry-run activo: no se eliminan productos ausentes.")
@@ -696,7 +592,7 @@ def prune_missing_scraper_products(
         if handle in current_handles:
             continue
 
-        # Respetar productos con tags de ignore
+        # NUEVO: Respetar productos con tags de ignore
         tags = meta.get("tags", set())
         if _has_ignore_tag(tags) or KEEP_DRAFT_TAG in tags:
             log(f"🛡️ '{handle}' protegido por tags, no se elimina en prune")
@@ -753,25 +649,12 @@ def run(
             current_handles=current_handles, dry_run=dry_run
         )
 
-    # Generar reporte de imágenes fallidas
-    if _failed_images_report:
-        report_path = source_dir / "failed_images_report.csv"
-        try:
-            with report_path.open("w", encoding="utf-8", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=["handle", "image_url", "reason"])
-                writer.writeheader()
-                writer.writerows(_failed_images_report)
-            log(f"\n⚠️  Se generó un reporte de imágenes fallidas: {report_path.name}")
-            log(f"    Total fallos: {len(_failed_images_report)}")
-        except Exception as e:
-            log(f"❌ Error escribiendo reporte de imágenes: {e}")
-
     return summary_total
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Subir productos Shopify con protección de borrador e ignore y reintentos automáticos.",
+        description="Subir productos Shopify con protección de borrador e ignore.",
         epilog="""
 Tags de control disponibles:
   scraper:keep-draft    → Mantener siempre en borrador
@@ -781,8 +664,6 @@ Tags de control disponibles:
 Variables de entorno:
   SHOPIFY_DOMAIN              Tu dominio de Shopify
   SHOPIFY_ADMIN_TOKEN         Token de acceso admin
-  SHOPIFY_RATE_DELAY          Delay entre peticiones (default: 1.0)
-  SHOPIFY_MAX_RETRIES         Número máximo de reintentos (default: 3)
   SHOPIFY_KEEP_DRAFT_TAG      Tag para borrador (default: scraper:keep-draft)
   SHOPIFY_IGNORE_TAGS         Tags de ignore separados por comas (default: scraper:ignore,no tocar)
         """
@@ -814,7 +695,6 @@ def main() -> int:
             source_dir = source_dir.expanduser().resolve()
 
         log(f"📂 Directorio de origen: {source_dir}")
-        log(f"⚙️ Configuración de reintentos: {MAX_RETRIES} intentos, delay {RATE_LIMIT_DELAY}s")
         log(f"🏷️  Tags de ignore configurados: {', '.join(IGNORE_TAGS)}")
         log(f"📝 Tag de borrador: {KEEP_DRAFT_TAG}")
 
