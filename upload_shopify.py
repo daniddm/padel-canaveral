@@ -1,5 +1,5 @@
 """
-upload_shopify.py - VersiÃ³n mÃ­nima con protecciÃ³n de borrador e ignore
+upload_shopify.py - Versión mínima con protección de borrador e ignore
 
 Cambios aplicados:
 1. Respeta productos en borrador (status=draft)
@@ -62,14 +62,14 @@ def _split_tags(tags_raw: str) -> Set[str]:
 
 
 def _has_ignore_tag(tags: Set[str]) -> bool:
-    """Verifica si el producto tiene algÃºn tag de ignore."""
+    """Verifica si el producto tiene algún tag de ignore."""
     return any(t.lower() in IGNORE_TAGS for t in tags)
 
 
 def clean_price(value: str) -> Optional[str]:
     if not value:
         return None
-    cleaned = value.replace("â‚¬", "").replace("EUR", "").replace("euros", "")
+    cleaned = value.replace("€", "").replace("EUR", "").replace("euros", "")
     cleaned = cleaned.replace(" ", "")
     cleaned = cleaned.replace(",", ".")
     cleaned = re.sub(r"[^0-9.]", "", cleaned)
@@ -101,12 +101,12 @@ def parse_inventory_quantity(value: str) -> int:
 
 def discover_latest_directory(base_path: Path) -> Path:
     candidates = sorted(
-        [p for p in base_path.glob("ExtracciÃ³n_*") if p.is_dir()],
+        [p for p in base_path.glob("Extracción_*") if p.is_dir()],
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
     if not candidates:
-        raise ShopifyUploaderError("No se encontrÃ³ ninguna carpeta 'ExtracciÃ³n_*'.")
+        raise ShopifyUploaderError("No se encontró ninguna carpeta 'Extracción_*'.")
     return candidates[0]
 
 
@@ -117,7 +117,7 @@ def group_rows_by_handle(csv_path: Path) -> Dict[str, List[Dict[str, str]]]:
         for row in reader:
             handle = (row.get("URL handle") or "").strip()
             if not handle:
-                log(f"âš ï¸ Fila sin 'URL handle' en {csv_path.name}, se omite.")
+                log(f"⚠️ Fila sin 'URL handle' en {csv_path.name}, se omite.")
                 continue
             groups.setdefault(handle, []).append(row)
     return groups
@@ -210,15 +210,42 @@ def shopify_request(method: str, endpoint: str, *, params=None, json=None) -> re
 
 def shopify_graphql(query: str, variables: dict = None) -> dict:
     """Ejecuta una query GraphQL contra Shopify."""
+    payload = {"query": query, "variables": variables or {}}
     resp = requests.post(
         GRAPHQL_URL,
         headers=HEADERS,
-        json={"query": query, "variables": variables or {}},
+        json=payload,
         timeout=REQUEST_TIMEOUT,
     )
-    data = resp.json()
-    if resp.status_code >= 400 or "errors" in data:
+
+    if resp.status_code >= 400:
+        preview = resp.text.strip()
+        preview = preview[:400] + ("…" if len(preview) > 400 else "")
+        raise ShopifyUploaderError(
+            f"GraphQL error HTTP {resp.status_code}: {preview or '<cuerpo vacío>'}"
+        )
+
+    if not resp.text.strip():
+        raise ShopifyUploaderError(
+            f"GraphQL respuesta vacía (status {resp.status_code})"
+        )
+
+    try:
+        data = resp.json()
+    except requests.exceptions.JSONDecodeError as exc:
+        preview = resp.text.strip()
+        preview = preview[:400] + ("…" if len(preview) > 400 else "")
+        raise ShopifyUploaderError(
+            f"GraphQL respuesta no JSON (status {resp.status_code}): {preview or '<cuerpo vacío>'}"
+        ) from exc
+
+    if "errors" in data:
         raise ShopifyUploaderError(f"GraphQL error: {resp.status_code} {data}")
+
+    if "data" not in data or data["data"] is None:
+        raise ShopifyUploaderError(
+            f"GraphQL respuesta sin campo 'data' (status {resp.status_code}): {data}"
+        )
     time.sleep(RATE_LIMIT_DELAY)
     return data["data"]
 
@@ -251,16 +278,16 @@ def find_product_by_barcode_or_sku(barcode: str, sku: str):
 
 
 def create_redirect(old_handle: str, new_handle: str) -> None:
-    """Crea un redirect 301 si el handle cambiÃ³."""
+    """Crea un redirect 301 si el handle cambió."""
     if not old_handle or not new_handle or old_handle == new_handle:
         return
     try:
         shopify_request("POST", "redirects.json", json={
             "redirect": {"path": f"/products/{old_handle}", "target": f"/products/{new_handle}"}
         })
-        log(f"ðŸ” Redirect 301 /products/{old_handle} â†’ /products/{new_handle}")
+        log(f"🔁 Redirect 301 /products/{old_handle} → /products/{new_handle}")
     except ShopifyUploaderError as exc:
-        log(f"âš ï¸ No se pudo crear redirect: {exc}")
+        log(f"⚠️ No se pudo crear redirect: {exc}")
 
 
 def _fetch_products_by_status(status: Optional[str] = None) -> Dict[str, int]:
@@ -327,7 +354,7 @@ def find_existing_product_id(handle: str) -> Optional[int]:
 
 def delete_product(product_id: int) -> None:
     shopify_request("DELETE", f"products/{product_id}.json")
-    log(f"ðŸ§¹ Producto existente {product_id} eliminado para rehacerlo.")
+    log(f"🧹 Producto existente {product_id} eliminado para rehacerlo.")
 
 
 def create_product(payload: Dict) -> Dict:
@@ -348,22 +375,22 @@ def process_csv(
     groups = group_rows_by_handle(csv_path)
 
     if not groups:
-        log(f"âš ï¸ CSV {csv_path.name} sin filas vÃ¡lidas.")
+        log(f"⚠️ CSV {csv_path.name} sin filas válidas.")
         return summary, set()
 
     for handle, rows in groups.items():
-        log(f"âž¡ï¸ Procesando producto '{handle}' ({len(rows)} variantes)")
+        log(f"➡️ Procesando producto '{handle}' ({len(rows)} variantes)")
 
         # Construir payload desde CSV
         try:
             payload = build_product_payload(rows)
         except Exception as exc:
-            log(f"âŒ Error preparando el payload para '{handle}': {exc}")
+            log(f"❌ Error preparando el payload para '{handle}': {exc}")
             summary["skipped"] += 1
             continue
 
         if dry_run:
-            log(f"ðŸ”Ž Dry-run: no se sube '{handle}'.")
+            log(f"🔎 Dry-run: no se sube '{handle}'.")
             summary["skipped"] += 1
             continue
 
@@ -373,10 +400,16 @@ def process_csv(
         key_sku = (base.get("SKU") or "").strip()
 
         found = None
-        try:
-            found = find_product_by_barcode_or_sku(key_barcode, key_sku)
-        except ShopifyUploaderError as exc:
-            log(f"âš ï¸ Lookup por EAN/SKU fallÃ³: {exc}")
+        for attempt in range(3):
+            try:
+                found = find_product_by_barcode_or_sku(key_barcode, key_sku)
+                break
+            except ShopifyUploaderError as exc:
+                if attempt < 2:
+                    log(f"⚠️ Lookup falló (intento {attempt + 1}/3): {exc}")
+                    time.sleep(2)
+                else:
+                    log(f"⚠️ Lookup por EAN/SKU falló después de 3 intentos: {exc}")
 
         existing_id = None
         old_handle = None
@@ -397,11 +430,11 @@ def process_csv(
                 existing_status = (existing_product.get("status") or "").lower()
                 existing_tags = _split_tags(existing_product.get("tags", ""))
             except ShopifyUploaderError as exc:
-                log(f"âš ï¸ No se pudo leer el producto {existing_id}: {exc}")
+                log(f"⚠️ No se pudo leer el producto {existing_id}: {exc}")
 
         # >>> A) IGNORE: no tocar <<<
         if _has_ignore_tag(existing_tags):
-            log(f"ðŸš« '{handle}' tiene tag de ignore (no tocar), omitido")
+            log(f"🚫 '{handle}' tiene tag de ignore (no tocar), omitido")
             summary["skipped"] += 1
             continue
 
@@ -412,7 +445,7 @@ def process_csv(
             new_tags = _split_tags(payload["product"].get("tags") or "")
             new_tags.add(KEEP_DRAFT_TAG)
             payload["product"]["tags"] = ", ".join(sorted(new_tags))
-            log(f"ðŸ“ '{handle}' mantenido en borrador (status=draft o tag={KEEP_DRAFT_TAG})")
+            log(f"📝 '{handle}' mantenido en borrador (status=draft o tag={KEEP_DRAFT_TAG})")
 
         # >>> Procesar producto <<<
         try:
@@ -422,7 +455,7 @@ def process_csv(
                 _update_products_cache(deleted_handle, None)
                 summary["deleted"] += 1
             elif existing_id:
-                log(f"â„¹ï¸ Producto '{handle}' ya existe y 'delete_existing' es False. Se omite.")
+                log(f"ℹ️ Producto '{handle}' ya existe y 'delete_existing' es False. Se omite.")
                 summary["skipped"] += 1
                 continue
 
@@ -430,21 +463,21 @@ def process_csv(
             if created.get("id"):
                 summary["created"] += 1
                 _update_products_cache(handle, created["id"])
-                log(f"âœ… Producto '{handle}' creado (ID {created['id']}).")
+                log(f"✅ Producto '{handle}' creado (ID {created['id']}).")
 
-                # Crear redirect 301 si el handle cambiÃ³
+                # Crear redirect 301 si el handle cambió
                 if old_handle and old_handle != handle:
                     create_redirect(old_handle, handle)
             else:
                 summary["skipped"] += 1
-                log(f"âš ï¸ Shopify no devolviÃ³ ID para '{handle}'.")
+                log(f"⚠️ Shopify no devolvió ID para '{handle}'.")
 
         except ShopifyUploaderError as exc:
             summary["skipped"] += 1
-            log(f"âŒ Error subiendo '{handle}': {exc}")
+            log(f"❌ Error subiendo '{handle}': {exc}")
         except Exception as exc:
             summary["skipped"] += 1
-            log(f"âŒ Error inesperado con '{handle}': {exc}")
+            log(f"❌ Error inesperado con '{handle}': {exc}")
 
     return summary, set(groups.keys())
 
@@ -452,7 +485,7 @@ def process_csv(
 def list_scraper_products() -> Dict[str, Dict[str, Any]]:
     """
     Return mapping handle -> {id, tags} for products tagged by the scraper.
-    NUEVO: Devuelve tambiÃ©n los tags para respetar ignore en prune.
+    NUEVO: Devuelve también los tags para respetar ignore en prune.
     """
     products: Dict[str, Dict[str, Any]] = {}
     params_base = {"limit": 250, "fields": "id,handle,tags"}
@@ -495,7 +528,7 @@ def prune_missing_scraper_products(
     NUEVO: Respeta productos con tags de ignore (scraper:ignore, no tocar).
     """
     if dry_run:
-        log("ðŸ”Ž Dry-run activo: no se eliminan productos ausentes.")
+        log("🔎 Dry-run activo: no se eliminan productos ausentes.")
         return 0
 
     products = list_scraper_products()
@@ -508,13 +541,13 @@ def prune_missing_scraper_products(
         # NUEVO: Respetar productos con tags de ignore
         tags = meta.get("tags", set())
         if _has_ignore_tag(tags) or KEEP_DRAFT_TAG in tags:
-            log(f"ðŸ›¡ï¸ '{handle}' protegido por tags, no se elimina en prune")
+            log(f"🛡️ '{handle}' protegido por tags, no se elimina en prune")
             continue
 
         to_delete.append((handle, meta["id"]))
 
     if not to_delete:
-        log("âœ… No hay productos obsoletos para eliminar")
+        log("✅ No hay productos obsoletos para eliminar")
         return 0
 
     deleted = 0
@@ -522,9 +555,9 @@ def prune_missing_scraper_products(
         try:
             delete_product(product_id)
             deleted += 1
-            log(f"ðŸ§¹ Producto '{handle}' eliminado por faltar en el scrape actual.")
+            log(f"🧹 Producto '{handle}' eliminado por faltar en el scrape actual.")
         except ShopifyUploaderError as exc:
-            log(f"âš ï¸ No se pudo eliminar '{handle}': {exc}")
+            log(f"⚠️ No se pudo eliminar '{handle}': {exc}")
 
     return deleted
 
@@ -543,13 +576,13 @@ def run(
     csv_files = sorted(source_dir.glob("*.csv"))
 
     if not csv_files:
-        log(f"âš ï¸ No se encontraron CSV en {source_dir}")
+        log(f"⚠️ No se encontraron CSV en {source_dir}")
         return summary_total
 
     current_handles: Set[str] = set()
 
     for csv_path in csv_files:
-        log(f"ðŸ“„ Subiendo CSV: {csv_path.name}")
+        log(f"📄 Subiendo CSV: {csv_path.name}")
         summary, handles = process_csv(
             csv_path, dry_run=dry_run, delete_existing=delete_existing
         )
@@ -567,12 +600,12 @@ def run(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Subir productos Shopify con protecciÃ³n de borrador e ignore.",
+        description="Subir productos Shopify con protección de borrador e ignore.",
         epilog="""
 Tags de control disponibles:
-  scraper:keep-draft    â†’ Mantener siempre en borrador
-  scraper:ignore        â†’ No tocar este producto nunca
-  no tocar              â†’ Alias de scraper:ignore
+  scraper:keep-draft    → Mantener siempre en borrador
+  scraper:ignore        → No tocar este producto nunca
+  no tocar              → Alias de scraper:ignore
   
 Variables de entorno:
   SHOPIFY_DOMAIN              Tu dominio de Shopify
@@ -607,9 +640,9 @@ def main() -> int:
         else:
             source_dir = source_dir.expanduser().resolve()
 
-        log(f"ðŸ“‚ Directorio de origen: {source_dir}")
-        log(f"ðŸ·ï¸  Tags de ignore configurados: {', '.join(IGNORE_TAGS)}")
-        log(f"ðŸ“ Tag de borrador: {KEEP_DRAFT_TAG}")
+        log(f"📂 Directorio de origen: {source_dir}")
+        log(f"🏷️  Tags de ignore configurados: {', '.join(IGNORE_TAGS)}")
+        log(f"📝 Tag de borrador: {KEEP_DRAFT_TAG}")
 
         summary = run(
             source_dir,
@@ -619,7 +652,7 @@ def main() -> int:
         )
 
         log(
-            "ðŸ“Š Resumen subida -> creados: {created}, borrados: {deleted}, omitidos: {skipped}, pruned: {pruned}".format(
+            "📊 Resumen subida -> creados: {created}, borrados: {deleted}, omitidos: {skipped}, pruned: {pruned}".format(
                 created=summary["created"],
                 deleted=summary["deleted"],
                 skipped=summary["skipped"],
@@ -629,10 +662,10 @@ def main() -> int:
         return 0
 
     except ShopifyUploaderError as exc:
-        log(f"âŒ {exc}")
+        log(f"❌ {exc}")
         return 1
     except KeyboardInterrupt:
-        log("â¹ï¸ Proceso interrumpido por el usuario.")
+        log("⏹️ Proceso interrumpido por el usuario.")
         return 130
 
 
